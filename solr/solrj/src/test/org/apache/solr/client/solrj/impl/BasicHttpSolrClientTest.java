@@ -23,11 +23,13 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -39,14 +41,17 @@ import org.apache.http.ParseException;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.solr.SolrJettyTestBase;
+import org.apache.solr.client.solrj.SolrClient;
 import org.apache.solr.client.solrj.SolrQuery;
 import org.apache.solr.client.solrj.SolrRequest;
 import org.apache.solr.client.solrj.SolrRequest.METHOD;
 import org.apache.solr.client.solrj.SolrServerException;
+import org.apache.solr.client.solrj.StreamingResponseCallback;
 import org.apache.solr.client.solrj.embedded.JettyConfig;
 import org.apache.solr.client.solrj.request.QueryRequest;
 import org.apache.solr.client.solrj.request.UpdateRequest;
 import org.apache.solr.client.solrj.response.QueryResponse;
+import org.apache.solr.common.SolrDocument;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.SolrException.ErrorCode;
 import org.apache.solr.common.SolrInputDocument;
@@ -682,5 +687,50 @@ public class BasicHttpSolrClientTest extends SolrJettyTestBase {
       req.setQueryParams(setOf("requestOnly", "both", "neither"));
       verifyServletState(client, req);
     }
+  }
+
+  @Test
+  public void testStreamResponse() throws Exception {
+    // index a simple document with one child
+    SolrClient client = getSolrClient();
+    client.deleteByQuery("*:*");
+
+    SolrInputDocument child = new SolrInputDocument();
+    child.addField("id", "child");
+    child.addField("type_s", "child");
+    child.addField("text_s", "text");
+
+    SolrInputDocument parent = new SolrInputDocument();
+    parent.addField("id", "parent");
+    parent.addField("type_s", "parent");
+    parent.addChildDocument(child);
+
+    client.add(parent);
+    client.commit();
+
+    // create a query with child doc transformer
+    SolrQuery query = new SolrQuery("{!parent which='type_s:parent'}text_s:text");
+    query.addField("*,[child parentFilter='type_s:parent']");
+
+    // test regular query
+    QueryResponse response = client.query(query);
+    assertEquals(1, response.getResults().size());
+    assertEquals("parent", response.getResults().get(0).getFieldValue("id"));
+
+    // test streaming
+    final List<SolrDocument> docs = new ArrayList<>();
+    client.queryAndStreamResponse(query, new StreamingResponseCallback() {
+      @Override
+      public void streamSolrDocument(SolrDocument doc) {
+        docs.add(doc);
+      }
+
+      @Override
+      public void streamDocListInfo(long numFound, long start, Float maxScore) {
+      }
+    });
+
+    assertEquals(1, docs.size());
+    assertEquals("parent", docs.get(0).getFieldValue("id"));
   }
 }
